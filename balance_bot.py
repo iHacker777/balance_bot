@@ -181,11 +181,9 @@ def handle_history(update: Update, context: CallbackContext):
 
 def main():
     """Start the bot."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise RuntimeError("Set the TELEGRAM_BOT_TOKEN environment variable")
 
-    updater = Updater(token, use_context=True)
+    # TOKEN has already been read from config.ini at import time
+    updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
     # Listen for all text (to parse balances) and commands
