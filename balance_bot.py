@@ -6,8 +6,10 @@ import sqlite3
 from datetime import datetime
 import pytz
 import configparser                   # ← new
-from telegram import Update, ParseMode
-from telegram.ext import Updater, MessageHandler, CommandHandler, Filters, CallbackContext
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.ext import Updater, MessageHandler, CommandHandler, CallbackContext
+from telegram.ext import filters
 # Load bot token from config.ini
 config = configparser.ConfigParser()
 config.read("config.ini")
@@ -187,7 +189,7 @@ def main():
     dp = updater.dispatcher
 
     # Listen for all text (to parse balances) and commands
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     dp.add_handler(CommandHandler("balance", handle_balance))
     dp.add_handler(CommandHandler("history", handle_history))
 
