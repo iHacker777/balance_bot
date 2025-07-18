@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
-
 import os
 import re
 import sqlite3
 from datetime import datetime
 import pytz
-import configparser                   # ← new
+import configparser
+
 from telegram import Update
 from telegram.constants import ParseMode
-from telegram.ext import Updater, MessageHandler, CommandHandler, CallbackContext
-from telegram.ext import filters
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    MessageHandler,
+    CommandHandler,
+    filters,
+)
+
 # Load bot token from config.ini
 config = configparser.ConfigParser()
 config.read("config.ini")
@@ -22,7 +28,6 @@ except KeyError:
 IST = pytz.timezone("Asia/Kolkata")
 
 def init_db(path: str = "balances.db") -> sqlite3.Connection:
-    """Initialize SQLite DB and return the connection."""
     conn = sqlite3.connect(path, check_same_thread=False)
     c = conn.cursor()
     c.execute("""
@@ -40,10 +45,6 @@ def init_db(path: str = "balances.db") -> sqlite3.Connection:
     return conn
 
 def format_indian(amount: float) -> str:
-    """
-    Format a float into Indian-style comma grouping with two decimals,
-    e.g. 153834.03 → '1,53,834.03'
-    """
     sign = "-" if amount < 0 else ""
     x = abs(amount)
     whole = int(x)
@@ -59,7 +60,6 @@ def format_indian(amount: float) -> str:
         s = ",".join(parts) + "," + tail
     return f"{sign}{s}.{frac}"
 
-# Regex to capture "<alias>_<bank> ... <amount>"
 BALANCE_RE = re.compile(r"""
     ^\s*
     (?P<alias>[^\s_]+) _ (?P<bank>[^\s]+)   # alias_bank
@@ -68,40 +68,28 @@ BALANCE_RE = re.compile(r"""
 """, re.VERBOSE)
 
 def parse_balance(text: str):
-    """
-    Parse a line of text for alias_bank and amount.
-    Returns (alias, bank, amount: float, is_credit: int) or None.
-    """
     m = BALANCE_RE.search(text)
     if not m:
         return None
-
     alias = m.group("alias")
     bank  = m.group("bank").lower()
     raw   = m.group("amt").replace(",", "")
-
     is_credit = 0
-    # Handle TMB “Cr. ”
     if bank == "tmb":
         if "cr." in text.lower():
             is_credit = 1
         raw = re.sub(r"(?i)cr\.\s*", "", raw)
-    # Handle IDBI “INR ”
     if bank == "idbi":
         raw = re.sub(r"(?i)inr\s*", "", raw)
-
     try:
         amt = float(raw)
     except ValueError:
         return None
-
     return alias, bank, amt, is_credit
 
-# Initialize global DB connection
 DB = init_db()
 
-def handle_message(update: Update, context: CallbackContext):
-    """On every text message, try parsing a balance and storing it."""
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     text    = update.message.text or ""
     parsed  = parse_balance(text)
@@ -116,8 +104,7 @@ def handle_message(update: Update, context: CallbackContext):
     """, (chat_id, alias, bank, amt, is_credit, ts))
     DB.commit()
 
-def handle_balance(update: Update, context: CallbackContext):
-    """Show the latest balance for each alias in this chat."""
+async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     c = DB.cursor()
     c.execute("""
@@ -134,24 +121,17 @@ def handle_balance(update: Update, context: CallbackContext):
       ORDER BY alias
     """, (chat_id,))
     rows = c.fetchall()
-
     if not rows:
-        update.message.reply_text("No balances stored yet.")
+        await update.message.reply_text("No balances stored yet.")
         return
-
     lines = []
     for alias, bank, bal, credit in rows:
         s = format_indian(bal)
         suffix = " Cr." if credit else ""
         lines.append(f"`{alias}_{bank}`  💰: ₹{s}{suffix}")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
-    update.message.reply_text(
-        "\n".join(lines),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-def handle_history(update: Update, context: CallbackContext):
-    """Show the last 25 balance updates in this chat."""
+async def handle_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     c = DB.cursor()
     c.execute("""
@@ -162,37 +142,23 @@ def handle_history(update: Update, context: CallbackContext):
       LIMIT 25
     """, (chat_id,))
     rows = c.fetchall()
-
     if not rows:
-        update.message.reply_text("No history yet.")
+        await update.message.reply_text("No history yet.")
         return
-
     lines = []
     for alias, bank, bal, credit, ts in rows:
         s = format_indian(bal)
         suffix = " Cr." if credit else ""
         human_ts = datetime.fromisoformat(ts).strftime("%d %b %Y, %I:%M %p")
         lines.append(f"{human_ts} — `{alias}_{bank}`: ₹{s}{suffix}")
-
-    update.message.reply_text(
-        "\n".join(lines),
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 def main():
-    """Start the bot."""
-
-    # TOKEN has already been read from config.ini at import time
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
-
-    # Listen for all text (to parse balances) and commands
-    dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    dp.add_handler(CommandHandler("balance", handle_balance))
-    dp.add_handler(CommandHandler("history", handle_history))
-
-    updater.start_polling()
-    updater.idle()
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("balance", handle_balance))
+    app.add_handler(CommandHandler("history", handle_history))
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
